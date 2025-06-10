@@ -38,9 +38,14 @@ const sessionConfig = {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    sameSite: 'lax' as const,
-    domain: process.env.NODE_ENV === 'production' ? '.railway.app' : undefined
+    sameSite: (process.env.NODE_ENV === 'production' ? 'none' : 'lax') as 'none' | 'lax',
+    domain: process.env.NODE_ENV === 'production' 
+      ? new URL(process.env.FRONTEND_URL || '').hostname 
+      : undefined,
+    path: '/'
   },
+  name: 'spostats.sid', // Custom session cookie name
+  rolling: true, // Refresh session on activity
   // In production, we'll use a more secure approach
   store: process.env.NODE_ENV === 'production' 
     ? new session.MemoryStore() // TODO: Replace with Redis or similar in production
@@ -49,6 +54,17 @@ const sessionConfig = {
 
 // Use session middleware
 app.use(session(sessionConfig));
+
+// Add logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`, {
+    sessionID: req.sessionID,
+    hasSession: !!req.session,
+    cookies: req.cookies,
+    origin: req.headers.origin
+  });
+  next();
+});
 
 // Routes
 app.use('/auth', authRouter);

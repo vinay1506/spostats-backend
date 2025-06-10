@@ -43,8 +43,10 @@ router.get('/login', (req: Request, res: Response) => {
 
 // Callback route - handles the OAuth callback
 router.get('/callback', async (req: Request, res: Response) => {
-  console.log('Callback received:', {
+  console.log('Auth callback received:', {
     query: req.query,
+    cookies: req.cookies,
+    sessionID: req.sessionID,
     redirectUri: process.env.SPOTIFY_REDIRECT_URI,
     frontendUrl: process.env.FRONTEND_URL,
     state: req.query.state
@@ -64,6 +66,7 @@ router.get('/callback', async (req: Request, res: Response) => {
   }
 
   try {
+    console.log('Exchanging code for tokens...');
     // Exchange code for access token
     const tokenResponse = await axios.post(SPOTIFY_TOKEN_URL, 
       new URLSearchParams({
@@ -81,13 +84,15 @@ router.get('/callback', async (req: Request, res: Response) => {
     );
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
+    console.log('Token exchange successful, expires in:', expires_in);
 
-    // Store tokens in session
+    // Store tokens in session with expiration
     req.session.access_token = access_token;
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
     // Get user profile to store basic user info
+    console.log('Fetching user profile...');
     const profileResponse = await axios.get('https://api.spotify.com/v1/me', {
       headers: {
         'Authorization': `Bearer ${access_token}`
@@ -96,19 +101,30 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     const { id, display_name, email } = profileResponse.data;
     req.session.user = { id, display_name, email };
+    console.log('User profile fetched:', { id, display_name, email });
 
-    // Get the frontend URL from environment variable
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    
-    // Create a temporary token for the frontend
-    const tempToken = Buffer.from(JSON.stringify({
-      access_token,
-      expires_in,
-      user: { id, display_name, email }
-    })).toString('base64');
-    
-    // Redirect to frontend with temporary token
-    res.redirect(`${frontendUrl}/auth/callback?token=${tempToken}`);
+    // Save session before redirecting
+    req.session.save((err) => {
+      if (err) {
+        console.error('Error saving session:', err);
+        return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_error`);
+      }
+
+      // Get the frontend URL from environment variable
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      
+      // Create a temporary token for the frontend with expiration
+      const tempToken = Buffer.from(JSON.stringify({
+        access_token,
+        expires_in,
+        expires_at: Date.now() + (expires_in * 1000),
+        user: { id, display_name, email }
+      })).toString('base64');
+      
+      console.log('Redirecting to frontend with session established');
+      // Redirect to frontend with temporary token
+      res.redirect(`${frontendUrl}/auth/callback?token=${tempToken}`);
+    });
   } catch (error) {
     console.error('Error during authentication:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -160,13 +176,21 @@ router.get('/logout', (req: Request, res: Response) => {
 
 // Refresh token route
 router.post('/refresh', async (req: Request, res: Response) => {
+  console.log('Token refresh requested:', {
+    sessionID: req.sessionID,
+    hasRefreshToken: !!req.session.refresh_token,
+    tokenExpiresAt: req.session.token_expires_at
+  });
+
   const refresh_token = req.session.refresh_token;
 
   if (!refresh_token) {
+    console.error('No refresh token available in session');
     return res.status(401).json({ error: 'No refresh token available' });
   }
 
   try {
+    console.log('Refreshing token...');
     const response = await axios.post(SPOTIFY_TOKEN_URL,
       new URLSearchParams({
         grant_type: 'refresh_token',
@@ -182,11 +206,25 @@ router.post('/refresh', async (req: Request, res: Response) => {
     );
 
     const { access_token, expires_in } = response.data;
+    console.log('Token refresh successful, expires in:', expires_in);
     
+    // Update session with new token
     req.session.access_token = access_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
-    res.json({ access_token });
+    // Save session before sending response
+    req.session.save((err) => {
+      if (err) {
+        console.error('Error saving session during refresh:', err);
+        return res.status(500).json({ error: 'Could not save session' });
+      }
+
+      res.json({ 
+        access_token,
+        expires_in,
+        expires_at: req.session.token_expires_at
+      });
+    });
   } catch (error) {
     console.error('Error refreshing token:', error);
     res.status(500).json({ error: 'Could not refresh token' });
