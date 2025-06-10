@@ -10,6 +10,15 @@ const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
 // Login route - redirects to Spotify
 router.get('/login', (req: Request, res: Response) => {
+  const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
+  
+  if (!redirectUri) {
+    console.error('SPOTIFY_REDIRECT_URI is not set');
+    return res.status(500).json({ error: 'Server configuration error' });
+  }
+
+  console.log('Starting login flow with redirect URI:', redirectUri);
+
   const scope = [
     'user-read-private',
     'user-read-email',
@@ -21,11 +30,15 @@ router.get('/login', (req: Request, res: Response) => {
     response_type: 'code',
     client_id: process.env.SPOTIFY_CLIENT_ID!,
     scope: scope,
-    redirect_uri: process.env.SPOTIFY_REDIRECT_URI!,
-    show_dialog: 'true'
+    redirect_uri: redirectUri,
+    show_dialog: 'true',
+    state: 'spostats-auth' // Add state parameter for security
   });
 
-  res.redirect(`${SPOTIFY_AUTH_URL}?${params.toString()}`);
+  const authUrl = `${SPOTIFY_AUTH_URL}?${params.toString()}`;
+  console.log('Redirecting to Spotify auth URL:', authUrl);
+  
+  res.redirect(authUrl);
 });
 
 // Callback route - handles the OAuth callback
@@ -33,8 +46,15 @@ router.get('/callback', async (req: Request, res: Response) => {
   console.log('Callback received:', {
     query: req.query,
     redirectUri: process.env.SPOTIFY_REDIRECT_URI,
-    frontendUrl: process.env.FRONTEND_URL
+    frontendUrl: process.env.FRONTEND_URL,
+    state: req.query.state
   });
+
+  // Verify state parameter
+  if (req.query.state !== 'spostats-auth') {
+    console.error('Invalid state parameter:', req.query.state);
+    return res.status(400).json({ error: 'Invalid state parameter' });
+  }
 
   const { code } = req.query;
 
@@ -67,11 +87,15 @@ router.get('/callback', async (req: Request, res: Response) => {
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
-    // For now, just return success since we don't have a frontend
+    // Return success response
     res.json({ 
       status: 'success',
       message: 'Authentication successful',
-      redirectTo: `${process.env.FRONTEND_URL}/dashboard`
+      data: {
+        access_token,
+        expires_in,
+        token_type: 'Bearer'
+      }
     });
   } catch (error) {
     console.error('Error during token exchange:', error);
