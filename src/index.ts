@@ -64,9 +64,20 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
 
 // Start the server
 const PORT = process.env.PORT || 3000;
+console.log('Starting server...');
+console.log('Environment variables:');
+console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log('- PORT:', PORT);
+console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
+console.log('- SPOTIFY_REDIRECT_URI:', process.env.SPOTIFY_REDIRECT_URI);
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV}`);
+  console.log('Server startup complete');
+}).on('error', (err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
 
 // Export for Vercel
