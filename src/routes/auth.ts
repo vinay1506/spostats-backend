@@ -30,9 +30,16 @@ router.get('/login', (req: Request, res: Response) => {
 
 // Callback route - handles the OAuth callback
 router.get('/callback', async (req: Request, res: Response) => {
+  console.log('Callback received:', {
+    query: req.query,
+    redirectUri: process.env.SPOTIFY_REDIRECT_URI,
+    frontendUrl: process.env.FRONTEND_URL
+  });
+
   const { code } = req.query;
 
   if (!code) {
+    console.error('No code provided in callback');
     return res.status(400).json({ error: 'No code provided' });
   }
 
@@ -60,11 +67,19 @@ router.get('/callback', async (req: Request, res: Response) => {
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
-    // Redirect to frontend with success
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    // For now, just return success since we don't have a frontend
+    res.json({ 
+      status: 'success',
+      message: 'Authentication successful',
+      redirectTo: `${process.env.FRONTEND_URL}/dashboard`
+    });
   } catch (error) {
     console.error('Error during token exchange:', error);
-    res.redirect(`${process.env.FRONTEND_URL}/error`);
+    res.status(500).json({ 
+      status: 'error',
+      message: 'Authentication failed',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 });
 
