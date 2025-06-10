@@ -53,14 +53,14 @@ router.get('/callback', async (req: Request, res: Response) => {
   // Verify state parameter
   if (req.query.state !== 'spostats-auth') {
     console.error('Invalid state parameter:', req.query.state);
-    return res.status(400).json({ error: 'Invalid state parameter' });
+    return res.redirect(`${process.env.FRONTEND_URL}/error?message=invalid_state`);
   }
 
   const { code } = req.query;
 
   if (!code) {
     console.error('No code provided in callback');
-    return res.status(400).json({ error: 'No code provided' });
+    return res.redirect(`${process.env.FRONTEND_URL}/error?message=no_code`);
   }
 
   try {
@@ -87,22 +87,63 @@ router.get('/callback', async (req: Request, res: Response) => {
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
+    // Get user profile to store basic user info
+    const profileResponse = await axios.get('https://api.spotify.com/v1/me', {
+      headers: {
+        'Authorization': `Bearer ${access_token}`
+      }
+    });
+
+    const { id, display_name, email } = profileResponse.data;
+    req.session.user = { id, display_name, email };
+
     // Get the frontend URL from environment variable
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     
-    // Redirect to frontend with token
-    const redirectUrl = new URL('/dashboard', frontendUrl);
-    redirectUrl.searchParams.set('token', access_token);
-    redirectUrl.searchParams.set('expires_in', expires_in.toString());
+    // Create a temporary token for the frontend
+    const tempToken = Buffer.from(JSON.stringify({
+      access_token,
+      expires_in,
+      user: { id, display_name, email }
+    })).toString('base64');
     
-    res.redirect(redirectUrl.toString());
+    // Redirect to frontend with temporary token
+    res.redirect(`${frontendUrl}/auth/callback?token=${tempToken}`);
   } catch (error) {
-    console.error('Error during token exchange:', error);
-    res.status(500).json({ 
-      status: 'error',
-      message: 'Authentication failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
+    console.error('Error during authentication:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.redirect(`${process.env.FRONTEND_URL}/error?message=${encodeURIComponent(errorMessage)}`);
+  }
+});
+
+// Verify token endpoint for frontend
+router.post('/verify', (req: Request, res: Response) => {
+  const { token } = req.body;
+  
+  if (!token) {
+    return res.status(400).json({ error: 'No token provided' });
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    const { access_token, expires_in, user } = decoded;
+
+    // Verify the token is still valid
+    if (Date.now() >= (decoded.expires_at * 1000)) {
+      return res.status(401).json({ error: 'Token expired' });
+    }
+
+    res.json({ 
+      status: 'success',
+      data: {
+        access_token,
+        expires_in,
+        user
+      }
     });
+  } catch (error) {
+    console.error('Error verifying token:', error);
+    res.status(401).json({ error: 'Invalid token' });
   }
 });
 
