@@ -87,16 +87,15 @@ router.get('/callback', async (req: Request, res: Response) => {
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
-    // Return success response
-    res.json({ 
-      status: 'success',
-      message: 'Authentication successful',
-      data: {
-        access_token,
-        expires_in,
-        token_type: 'Bearer'
-      }
-    });
+    // Get the frontend URL from environment variable
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    
+    // Redirect to frontend with token
+    const redirectUrl = new URL('/dashboard', frontendUrl);
+    redirectUrl.searchParams.set('token', access_token);
+    redirectUrl.searchParams.set('expires_in', expires_in.toString());
+    
+    res.redirect(redirectUrl.toString());
   } catch (error) {
     console.error('Error during token exchange:', error);
     res.status(500).json({ 
