@@ -22,7 +22,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
   origin: process.env.NODE_ENV === 'production'
-    ? 'https://spostats-frontend.vercel.app' // your deployed frontend URL
+    ? 'https://spotracker-nine.vercel.app'
     : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
