@@ -10,7 +10,7 @@ const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
 // Login route - redirects to Spotify
 router.get('/login', (req: Request, res: Response) => {
-  const redirectUri = process.env.SPOTIFY_REDIRECT_URI;
+  const redirectUri = process.env.SPOTIFY_REDIRECT_URI?.trim();
   
   if (!redirectUri) {
     console.error('SPOTIFY_REDIRECT_URI is not set');
@@ -32,9 +32,10 @@ router.get('/login', (req: Request, res: Response) => {
     scope: scope,
     redirect_uri: redirectUri,
     show_dialog: 'true',
-    state: 'spostats-auth' // Add state parameter for security
+    state: 'spostats-auth'
   });
 
+  // Ensure the URL is properly encoded
   const authUrl = `${SPOTIFY_AUTH_URL}?${params.toString()}`;
   console.log('Redirecting to Spotify auth URL:', authUrl);
   
@@ -110,9 +111,8 @@ router.get('/callback', async (req: Request, res: Response) => {
         return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_error`);
       }
 
-      // Get the frontend URL from environment variable
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-      
+      // Get the frontend URL from environment variable, trimmed
+      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
       // Create a temporary token for the frontend with expiration
       const tempToken = Buffer.from(JSON.stringify({
         access_token,
@@ -120,10 +120,11 @@ router.get('/callback', async (req: Request, res: Response) => {
         expires_at: Date.now() + (expires_in * 1000),
         user: { id, display_name, email }
       })).toString('base64');
-      
-      console.log('Redirecting to frontend with session established');
+      // Construct the final redirect URL
+      const redirectUrl = `${frontendUrl}/auth/callback?token=${tempToken}`;
+      console.log('Redirecting to:', redirectUrl);
       // Redirect to frontend with temporary token
-      res.redirect(`${frontendUrl}/auth/callback?token=${tempToken}`);
+      res.redirect(redirectUrl);
     });
   } catch (error) {
     console.error('Error during authentication:', error);
