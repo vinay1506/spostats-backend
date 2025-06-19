@@ -21,9 +21,9 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? process.env.FRONTEND_URL 
-    : true, // Allow all origins in development/testing
+  origin: process.env.NODE_ENV === 'production'
+    ? 'https://spostats-frontend.vercel.app' // your deployed frontend URL
+    : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -39,16 +39,12 @@ const sessionConfig = {
     httpOnly: true,
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
     sameSite: (process.env.NODE_ENV === 'production' ? 'none' : 'lax') as 'none' | 'lax',
-    domain: process.env.NODE_ENV === 'production' 
-      ? new URL(process.env.FRONTEND_URL || '').hostname 
-      : undefined,
     path: '/'
   },
-  name: 'spostats.sid', // Custom session cookie name
-  rolling: true, // Refresh session on activity
-  // In production, we'll use a more secure approach
-  store: process.env.NODE_ENV === 'production' 
-    ? new session.MemoryStore() // TODO: Replace with Redis or similar in production
+  name: 'spostats.sid',
+  rolling: true,
+  store: process.env.NODE_ENV === 'production'
+    ? new session.MemoryStore()
     : new session.MemoryStore()
 };
 
