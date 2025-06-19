@@ -72,6 +72,7 @@ router.get('/recently-played', requireAuth, async (req: Request, res: Response) 
 
 // Get current user's profile
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
+  console.log('Session in /me:', req.session, 'SessionID:', req.sessionID);
   try {
     const data = await spotifyRequest(
       req.session.access_token!,
