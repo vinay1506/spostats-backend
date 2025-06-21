@@ -44,17 +44,17 @@ app.use(cors({
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-super-secret-key-that-is-long-and-random',
   resave: false,
-  saveUninitialized: false,
-  rolling: true, // Refresh session on each request
+  saveUninitialized: true,
+  rolling: true,
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // Only secure in production
+    secure: true,
     httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-origin in production
-    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    sameSite: 'none',
+    maxAge: 24 * 60 * 60 * 1000,
     path: '/',
-    domain: process.env.NODE_ENV === 'production' ? undefined : undefined // Let browser handle domain
   },
-  name: 'spostats.sid' // Custom session ID name
+  name: 'spotracker.sid',
+  proxy: true
 }));
 
 // Enhanced logging middleware for debugging sessions
@@ -73,7 +73,12 @@ app.use((req, res, next) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    sessionID: req.sessionID,
+    hasSession: !!req.session
+  });
 });
 
 // Routes
@@ -91,4 +96,4 @@ app.use((err: Error, req: express.Request, res: express.Response, next: express.
   });
 });
 
-export default app; 
+export default app;
