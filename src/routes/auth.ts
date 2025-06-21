@@ -67,7 +67,6 @@ router.get('/callback', async (req: Request, res: Response) => {
   }
 
   try {
-    console.log('Exchanging code for tokens...');
     // Exchange code for access token
     const tokenResponse = await axios.post(SPOTIFY_TOKEN_URL, 
       new URLSearchParams({
@@ -85,7 +84,6 @@ router.get('/callback', async (req: Request, res: Response) => {
     );
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
-    console.log('Token exchange successful, expires in:', expires_in);
 
     // Store tokens in session with expiration
     req.session.access_token = access_token;
@@ -93,7 +91,6 @@ router.get('/callback', async (req: Request, res: Response) => {
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
 
     // Get user profile to store basic user info
-    console.log('Fetching user profile...');
     const profileResponse = await axios.get('https://api.spotify.com/v1/me', {
       headers: {
         'Authorization': `Bearer ${access_token}`
@@ -102,7 +99,6 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     const { id, display_name, email } = profileResponse.data;
     req.session.user = { id, display_name, email };
-    console.log('User profile fetched:', { id, display_name, email });
 
     // Save session before redirecting
     req.session.save((err) => {
@@ -111,11 +107,21 @@ router.get('/callback', async (req: Request, res: Response) => {
         return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_error`);
       }
 
-      // Get the frontend URL from environment variable, trimmed
+      // Construct the token payload for the frontend
+      const tokenPayload = {
+        access_token,
+        refresh_token,
+        expires_in,
+        expires_at: Date.now() + (expires_in * 1000),
+        user: { id, display_name, email }
+      };
+      const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
+
+      // Redirect to the correct frontend callback URL with the token
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
-      
-      console.log('Redirecting to frontend:', frontendUrl);
-      res.redirect(frontendUrl);
+      const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(token)}`;
+      console.log('Redirecting to:', redirectUrl);
+      res.redirect(redirectUrl);
     });
   } catch (error) {
     console.error('Error during authentication:', error);
