@@ -113,54 +113,14 @@ router.get('/callback', async (req: Request, res: Response) => {
 
       // Get the frontend URL from environment variable, trimmed
       const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
-      // Create a temporary token for the frontend with expiration
-      const tempToken = Buffer.from(JSON.stringify({
-        access_token,
-        expires_in,
-        expires_at: Date.now() + (expires_in * 1000),
-        user: { id, display_name, email }
-      })).toString('base64');
-      // Construct the final redirect URL
-      const redirectUrl = `${frontendUrl}/auth/callback?token=${tempToken}`;
-      console.log('Redirecting to:', redirectUrl);
-      // Redirect to frontend with temporary token
-      res.redirect(redirectUrl);
+      
+      console.log('Redirecting to frontend:', frontendUrl);
+      res.redirect(frontendUrl);
     });
   } catch (error) {
     console.error('Error during authentication:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     res.redirect(`${process.env.FRONTEND_URL}/error?message=${encodeURIComponent(errorMessage)}`);
-  }
-});
-
-// Verify token endpoint for frontend
-router.post('/verify', (req: Request, res: Response) => {
-  const { token } = req.body;
-  
-  if (!token) {
-    return res.status(400).json({ error: 'No token provided' });
-  }
-
-  try {
-    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
-    const { access_token, expires_in, user } = decoded;
-
-    // Verify the token is still valid
-    if (Date.now() >= (decoded.expires_at * 1000)) {
-      return res.status(401).json({ error: 'Token expired' });
-    }
-
-    res.json({ 
-      status: 'success',
-      data: {
-        access_token,
-        expires_in,
-        user
-      }
-    });
-  } catch (error) {
-    console.error('Error verifying token:', error);
-    res.status(401).json({ error: 'Invalid token' });
   }
 });
 
@@ -171,13 +131,14 @@ router.get('/logout', (req: Request, res: Response) => {
       console.error('Error destroying session:', err);
       return res.status(500).json({ error: 'Could not log out' });
     }
-    res.redirect(process.env.FRONTEND_URL!);
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
+    res.redirect(frontendUrl);
   });
 });
 
-// Refresh token route
+// Refresh token route (can be called by frontend if needed)
 router.post('/refresh', async (req: Request, res: Response) => {
-  console.log('Token refresh requested:', {
+  console.log('Token refresh requested from dedicated endpoint:', {
     sessionID: req.sessionID,
     hasRefreshToken: !!req.session.refresh_token,
     tokenExpiresAt: req.session.token_expires_at
@@ -220,7 +181,8 @@ router.post('/refresh', async (req: Request, res: Response) => {
         return res.status(500).json({ error: 'Could not save session' });
       }
 
-      res.json({ 
+      res.json({
+        message: 'Token refreshed successfully',
         access_token,
         expires_in,
         expires_at: req.session.token_expires_at

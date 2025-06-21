@@ -1,36 +1,37 @@
 import express from 'express';
 import axios, { AxiosError } from 'axios';
-import { Request, Response } from 'express';
+import { Request, Response, NextFunction } from 'express';
 
 const router = express.Router();
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
-// Middleware to check if user is authenticated
-const requireAuth = (req: Request, res: Response, next: express.NextFunction) => {
-  console.log('requireAuth: Checking session', { sessionID: req.sessionID, accessToken: !!req.session.access_token });
-  if (!req.session.access_token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  next();
-};
+// Middleware to check authentication and refresh token if necessary
+const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
+  console.log('API request received. Checking auth for session:', req.sessionID);
 
-// Helper function to handle Spotify API token refresh
-const refreshToken = async (req: Request) => {
-  const refresh_token = req.session.refresh_token;
-
-  if (!refresh_token) {
-    console.error('No refresh token available');
-    throw new Error('No refresh token available');
+  // 1. Check if refresh token exists. If not, user needs to log in.
+  if (!req.session.refresh_token) {
+    console.log('No refresh token in session. User is not authenticated.');
+    return res.status(401).json({ error: 'Not authenticated. Please log in.' });
   }
 
-  console.log('Attempting to refresh token...');
+  // 2. Check if access token exists and is not expired.
+  const isTokenExpired = !req.session.token_expires_at || Date.now() >= req.session.token_expires_at - 60000;
+
+  if (req.session.access_token && !isTokenExpired) {
+    console.log('Access token is valid.');
+    return next();
+  }
+
+  // 3. If access token is missing or expired, try to refresh it.
+  console.log('Access token expired or missing. Attempting to refresh...');
   try {
     const response = await axios.post(
       SPOTIFY_TOKEN_URL,
       new URLSearchParams({
         grant_type: 'refresh_token',
-        refresh_token: refresh_token,
+        refresh_token: req.session.refresh_token,
       }),
       {
         headers: {
@@ -42,132 +43,108 @@ const refreshToken = async (req: Request) => {
       }
     );
 
-    const { access_token, expires_in } = response.data;
+    const { access_token, expires_in, refresh_token } = response.data;
     console.log('Token refreshed successfully.');
 
+    // Update session with the new token details
     req.session.access_token = access_token;
     req.session.token_expires_at = Date.now() + expires_in * 1000;
-    
-    // It's good practice to also update the refresh token if a new one is sent
-    if (response.data.refresh_token) {
-      req.session.refresh_token = response.data.refresh_token;
+    // Spotify may return a new refresh token, so we should update it if provided.
+    if (refresh_token) {
+      req.session.refresh_token = refresh_token;
     }
 
-    await new Promise((resolve, reject) => {
-        req.session.save(err => {
-            if (err) return reject(err);
-            resolve(null);
-        });
-    });
-
-    return access_token;
-  } catch (error) {
-    console.error('Error refreshing Spotify token:', error);
-    // If refresh fails, clear the session tokens to force re-login
-    req.session.access_token = undefined;
-    req.session.refresh_token = undefined;
-    req.session.token_expires_at = undefined;
-    await new Promise((resolve, reject) => {
-        req.session.save(err => {
-            if (err) return reject(err);
-            resolve(null);
-        });
-    });
-    throw new Error('Failed to refresh token');
-  }
-};
-
-// Helper function to make authenticated Spotify API calls
-const spotifyRequest = async (req: Request, endpoint: string) => {
-  // Check if token is expired or close to expiring
-  if (req.session.token_expires_at && Date.now() >= req.session.token_expires_at - 60000) {
-    console.log('Token expired or about to expire, refreshing...');
-    await refreshToken(req);
-  }
-
-  try {
-    console.log(`Making Spotify API request to: ${endpoint}`);
-    const response = await axios.get(`${SPOTIFY_API_BASE}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${req.session.access_token}`
+    // Save the session and proceed
+    req.session.save((err) => {
+      if (err) {
+        console.error('Error saving session after token refresh:', err);
+        return res.status(500).json({ error: 'Failed to save session after refresh.' });
       }
+      console.log('Session saved. Proceeding with the request.');
+      next();
     });
-    return response.data;
   } catch (error) {
-    const axiosError = error as AxiosError;
-    if (axiosError.response && axiosError.response.status === 401) {
-        console.log('Spotify API returned 401, attempting to refresh token...');
-        try {
-            await refreshToken(req);
-            // Retry the request with the new token
-            console.log(`Retrying Spotify API request to: ${endpoint}`);
-            const response = await axios.get(`${SPOTIFY_API_BASE}${endpoint}`, {
-                headers: { 'Authorization': `Bearer ${req.session.access_token}` }
-            });
-            return response.data;
-        } catch (refreshError) {
-            console.error('Failed to refresh token, user needs to re-authenticate.');
-            throw new Error('Spotify token refresh failed.');
+    console.error('Failed to refresh Spotify token:', error);
+    // If refresh fails, destroy the session to force re-login
+    req.session.destroy((err) => {
+        if (err) {
+            console.error('Failed to destroy session after refresh failure.', err);
+            return res.status(500).json({ error: 'Failed to process logout after token error.' });
         }
-    }
-    console.error('Spotify API error:', error);
-    throw error;
+        res.status(401).json({ error: 'Token refresh failed. Please log in again.' });
+    });
   }
 };
+
+// Generic error handler for API routes
+const handleApiError = (error: unknown, res: Response, context: string) => {
+    console.error(`Error fetching ${context}:`, error);
+    if (error instanceof AxiosError && error.response) {
+        return res.status(error.response.status).json({
+            error: `Failed to fetch ${context} from Spotify.`,
+            spotify_error: error.response.data
+        });
+    }
+    res.status(500).json({ error: `Failed to fetch ${context}.` });
+}
+
+// All API routes are protected by the requireAuth middleware
+router.use(requireAuth);
 
 // Get user's top tracks
-router.get('/top-tracks', requireAuth, async (req: Request, res: Response) => {
+router.get('/top-tracks', async (req: Request, res: Response) => {
   try {
     const { time_range = 'medium_term', limit = 20 } = req.query;
-    const data = await spotifyRequest(
-      req,
-      `/me/top/tracks?time_range=${time_range}&limit=${limit}`
+    const response = await axios.get(
+      `${SPOTIFY_API_BASE}/me/top/tracks?time_range=${time_range}&limit=${limit}`,
+      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
     );
-    res.json(data);
+    res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch top tracks' });
+    handleApiError(error, res, 'top tracks');
   }
 });
 
 // Get user's top artists
-router.get('/top-artists', requireAuth, async (req: Request, res: Response) => {
+router.get('/top-artists', async (req: Request, res: Response) => {
   try {
     const { time_range = 'medium_term', limit = 20 } = req.query;
-    const data = await spotifyRequest(
-      req,
-      `/me/top/artists?time_range=${time_range}&limit=${limit}`
+    const response = await axios.get(
+      `${SPOTIFY_API_BASE}/me/top/artists?time_range=${time_range}&limit=${limit}`,
+      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
     );
-    res.json(data);
+    res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch top artists' });
+    handleApiError(error, res, 'top artists');
   }
 });
 
 // Get user's recently played tracks
-router.get('/recently-played', requireAuth, async (req: Request, res: Response) => {
+router.get('/recently-played', async (req: Request, res: Response) => {
   try {
     const { limit = 20 } = req.query;
-    const data = await spotifyRequest(
-      req,
-      `/me/player/recently-played?limit=${limit}`
+    const response = await axios.get(
+      `${SPOTIFY_API_BASE}/me/player/recently-played?limit=${limit}`,
+      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
     );
-    res.json(data);
+    res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch recently played tracks' });
+    handleApiError(error, res, 'recently played tracks');
   }
 });
 
 // Get current user's profile
-router.get('/me', requireAuth, async (req: Request, res: Response) => {
+router.get('/me', async (req: Request, res: Response) => {
   console.log('Session in /me:', { sessionID: req.sessionID, user: req.session.user });
   try {
-    const data = await spotifyRequest(
-      req,
-      '/me'
+    const response = await axios.get(
+      `${SPOTIFY_API_BASE}/me`,
+      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
     );
-    res.json(data);
+    // Also attach user details from our session which might be useful for the frontend
+    res.json({ ...response.data, user: req.session.user });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch user profile' });
+    handleApiError(error, res, 'user profile');
   }
 });
 

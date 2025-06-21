@@ -1,47 +1,58 @@
 import express from 'express';
 import cors from 'cors';
 import session from 'express-session';
+import cookieParser from 'cookie-parser';
+import dotenv from 'dotenv';
 import { authRouter } from './routes/auth';
-import { statsRouter } from './routes/stats';
 import { apiRouter } from './routes/api';
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 
-// CORS configuration
-const allowedOrigins = [
-  'https://spostats-frontend.vercel.app',
-  'http://localhost:3000' // For local development
-];
+// Trust the first proxy for secure cookies in production (e.g., on Vercel)
+app.set('trust proxy', 1);
 
+// Middleware
+app.use(express.json());
+app.use(cookieParser());
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, etc)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
-  credentials: true, // Allow credentials (cookies, authorization headers, etc)
+  origin: [
+    process.env.FRONTEND_URL || 'http://localhost:3000',
+    'https://spostats-frontend.vercel.app' // Be explicit for production
+  ],
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 // Session configuration
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  secret: process.env.SESSION_SECRET || 'your-super-secret-key-that-is-long-and-random',
   resave: false,
   saveUninitialized: false,
+  rolling: true, // Refresh session on each request
   cookie: {
-    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
-    sameSite: 'lax', // Protect against CSRF
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-  }
+    secure: true, // Requires HTTPS
+    httpOnly: true,
+    sameSite: 'none', // Required for cross-origin cookies
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    path: '/'
+  },
+  name: 'spostats.sid' // Custom session ID name
 }));
 
-app.use(express.json());
+// Logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`, {
+    sessionID: req.sessionID,
+    hasSession: !!req.session,
+    user: req.session.user,
+    origin: req.headers.origin
+  });
+  next();
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -50,12 +61,11 @@ app.get('/health', (req, res) => {
 
 // Routes
 app.use('/auth', authRouter);
-app.use('/stats', statsRouter);
 app.use('/api', apiRouter);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Error:', err);
+  console.error('Unhandled Error:', err.stack);
   res.status(500).json({ 
     status: 'error',
     message: process.env.NODE_ENV === 'production' 
