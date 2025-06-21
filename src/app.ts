@@ -40,30 +40,34 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Session configuration
+// Session configuration - FIXED for cross-origin
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-super-secret-key-that-is-long-and-random',
   resave: false,
   saveUninitialized: false,
   rolling: true, // Refresh session on each request
   cookie: {
-    secure: true, // Requires HTTPS
+    secure: process.env.NODE_ENV === 'production', // Only secure in production
     httpOnly: true,
-    sameSite: 'none', // Required for cross-origin cookies
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // 'none' for cross-origin in production
     maxAge: 24 * 60 * 60 * 1000, // 24 hours
-    path: '/'
+    path: '/',
+    domain: process.env.NODE_ENV === 'production' ? undefined : undefined // Let browser handle domain
   },
   name: 'spostats.sid' // Custom session ID name
 }));
 
-// Logging middleware for debugging
+// Enhanced logging middleware for debugging sessions
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`, {
-    sessionID: req.sessionID,
-    hasSession: !!req.session,
-    user: req.session.user,
-    origin: req.headers.origin
-  });
+  console.log(`\n=== REQUEST DEBUG ===`);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('Session ID:', req.sessionID);
+  console.log('Session exists:', !!req.session);
+  console.log('Session data:', JSON.stringify(req.session, null, 2));
+  console.log('Cookies:', req.headers.cookie);
+  console.log('Origin:', req.headers.origin);
+  console.log('User-Agent:', req.headers['user-agent']);
+  console.log('======================\n');
   next();
 });
 

@@ -8,6 +8,16 @@ const router = express.Router();
 const SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
+// Extend session interface to include our custom properties
+declare module 'express-session' {
+  interface SessionData {
+    access_token?: string;
+    refresh_token?: string;
+    token_expires_at?: number;
+    user?: any;
+  }
+}
+
 // Login route - redirects to Spotify
 router.get('/login', (req: Request, res: Response) => {
   const redirectUri = process.env.SPOTIFY_REDIRECT_URI?.trim();
@@ -17,7 +27,9 @@ router.get('/login', (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Server configuration error' });
   }
 
-  console.log('Starting login flow with redirect URI:', redirectUri);
+  console.log('=== LOGIN FLOW START ===');
+  console.log('Session ID before login:', req.sessionID);
+  console.log('Redirect URI:', redirectUri);
 
   const scope = [
     'user-read-private',
@@ -32,42 +44,45 @@ router.get('/login', (req: Request, res: Response) => {
     scope: scope,
     redirect_uri: redirectUri,
     show_dialog: 'true',
-    state: 'spostats-auth'
+    state: req.sessionID // Use session ID as state for verification
   });
 
-  // Ensure the URL is properly encoded
   const authUrl = `${SPOTIFY_AUTH_URL}?${params.toString()}`;
   console.log('Redirecting to Spotify auth URL:', authUrl);
   
   res.redirect(authUrl);
 });
 
-// Callback route - handles the OAuth callback
+// Callback route - handles the OAuth callback - COMPLETE IMPLEMENTATION
 router.get('/callback', async (req: Request, res: Response) => {
-  console.log('Auth callback received:', {
-    query: req.query,
-    cookies: req.cookies,
-    sessionID: req.sessionID,
-    redirectUri: process.env.SPOTIFY_REDIRECT_URI,
-    frontendUrl: process.env.FRONTEND_URL,
-    state: req.query.state
-  });
+  console.log('\n=== OAUTH CALLBACK START ===');
+  console.log('Callback received with query:', req.query);
+  console.log('Session ID in callback:', req.sessionID);
+  console.log('Session data before processing:', JSON.stringify(req.session, null, 2));
 
-  // Verify state parameter
-  if (req.query.state !== 'spostats-auth') {
-    console.error('Invalid state parameter:', req.query.state);
-    return res.redirect(`${process.env.FRONTEND_URL}/error?message=invalid_state`);
+  const { code, state, error } = req.query;
+
+  // Handle OAuth errors
+  if (error) {
+    console.error('OAuth error:', error);
+    return res.redirect(`${process.env.FRONTEND_URL}/error?message=${error}`);
   }
 
-  const { code } = req.query;
+  // Verify state parameter (should match session ID from login)
+  if (!state) {
+    console.error('No state parameter provided');
+    return res.redirect(`${process.env.FRONTEND_URL}/error?message=no_state`);
+  }
 
   if (!code) {
-    console.error('No code provided in callback');
+    console.error('No authorization code provided');
     return res.redirect(`${process.env.FRONTEND_URL}/error?message=no_code`);
   }
 
   try {
-    // Exchange code for access token
+    console.log('Exchanging code for tokens...');
+    
+    // Exchange authorization code for access token
     const tokenResponse = await axios.post(SPOTIFY_TOKEN_URL, 
       new URLSearchParams({
         grant_type: 'authorization_code',
@@ -83,68 +98,105 @@ router.get('/callback', async (req: Request, res: Response) => {
       }
     );
 
-    const { access_token, refresh_token, expires_in } = tokenResponse.data;
+    const { access_token, refresh_token, expires_in, token_type } = tokenResponse.data;
+    
+    console.log('Token exchange successful!');
+    console.log('Token type:', token_type);
+    console.log('Expires in:', expires_in, 'seconds');
+    console.log('Access token length:', access_token?.length);
+    console.log('Refresh token length:', refresh_token?.length);
 
-    // Get user profile to store basic user info
-    const profileResponse = await axios.get('https://api.spotify.com/v1/me', {
+    // Get user profile from Spotify
+    console.log('Fetching user profile...');
+    const userResponse = await axios.get('https://api.spotify.com/v1/me', {
       headers: {
         'Authorization': `Bearer ${access_token}`
       }
     });
 
-    const { id, display_name, email } = profileResponse.data;
-    
-    // Assign data to the session object
-    Object.assign(req.session, {
-      access_token,
-      refresh_token,
-      token_expires_at: Date.now() + (expires_in * 1000),
-      user: { id, display_name, email }
-    });
+    const userProfile = userResponse.data;
+    console.log('User profile fetched:', userProfile.id, userProfile.display_name);
 
-    console.log('--- OAuth Callback ---');
-    console.log('Session data being saved:', JSON.stringify(req.session, null, 2));
-    console.log('--- End of OAuth Callback Debug ---');
+    // CRITICAL: Store tokens in session
+    console.log('Storing tokens in session...');
+    req.session.access_token = access_token;
+    req.session.refresh_token = refresh_token;
+    req.session.token_expires_at = Date.now() + (expires_in * 1000);
+    req.session.user = {
+      id: userProfile.id,
+      display_name: userProfile.display_name,
+      email: userProfile.email,
+      image: userProfile.images?.[0]?.url
+    };
 
-    // Save session before redirecting
+    console.log('Session data after storing tokens:', JSON.stringify(req.session, null, 2));
+
+    // Save session explicitly and wait for it to complete
     req.session.save((err) => {
       if (err) {
         console.error('Error saving session:', err);
-        return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_error`);
+        return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_save_failed`);
       }
 
-      // Construct the token payload for the frontend
-      const tokenPayload = {
-        access_token,
-        refresh_token,
-        expires_in,
-        expires_at: req.session.token_expires_at,
-        user: req.session.user
-      };
-      const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
-
-      // Redirect to the correct frontend callback URL with the token
-      const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
-      const redirectUrl = `${frontendUrl}/auth/callback?token=${encodeURIComponent(token)}`;
+      console.log('Session saved successfully!');
+      console.log('Final session ID:', req.sessionID);
+      
+      // Redirect to frontend with success
+      const redirectUrl = `${process.env.FRONTEND_URL}/dashboard?auth=success&session=${req.sessionID}`;
       console.log('Redirecting to:', redirectUrl);
+      console.log('=== OAUTH CALLBACK COMPLETE ===\n');
+      
       res.redirect(redirectUrl);
     });
+
   } catch (error) {
-    console.error('Error during authentication:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    res.redirect(`${process.env.FRONTEND_URL}/error?message=${encodeURIComponent(errorMessage)}`);
+    console.error('OAuth callback error:', error);
+    
+    if (axios.isAxiosError(error)) {
+      console.error('Spotify API error:', error.response?.data);
+      console.error('Status:', error.response?.status);
+    }
+    
+    res.redirect(`${process.env.FRONTEND_URL}/error?message=oauth_failed`);
   }
 });
 
 // Logout route
-router.get('/logout', (req: Request, res: Response) => {
+router.post('/logout', (req: Request, res: Response) => {
+  console.log('=== LOGOUT ===');
+  console.log('Session ID:', req.sessionID);
+  
   req.session.destroy((err) => {
     if (err) {
       console.error('Error destroying session:', err);
-      return res.status(500).json({ error: 'Could not log out' });
+      return res.status(500).json({ error: 'Failed to logout' });
     }
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim();
-    res.redirect(frontendUrl);
+    
+    console.log('Session destroyed successfully');
+    res.clearCookie('spostats.sid');
+    res.json({ success: true, message: 'Logged out successfully' });
+  });
+});
+
+// Check auth status
+router.get('/status', (req: Request, res: Response) => {
+  console.log('=== AUTH STATUS CHECK ===');
+  console.log('Session ID:', req.sessionID);
+  console.log('Session exists:', !!req.session);
+  console.log('Has access token:', !!req.session?.access_token);
+  console.log('Has refresh token:', !!req.session?.refresh_token);
+  console.log('Token expires at:', req.session?.token_expires_at);
+  console.log('Current time:', Date.now());
+  
+  const isAuthenticated = !!(req.session?.access_token && req.session?.refresh_token);
+  const tokenExpired = req.session?.token_expires_at ? Date.now() >= req.session.token_expires_at - 60000 : true;
+  
+  res.json({
+    authenticated: isAuthenticated,
+    tokenExpired: tokenExpired,
+    user: req.session?.user,
+    sessionID: req.sessionID,
+    expiresAt: req.session?.token_expires_at
   });
 });
 
