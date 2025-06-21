@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import session from 'express-session';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import { authRouter } from './routes/auth';
@@ -40,30 +39,10 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Session configuration - FIXED for cross-origin
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-super-secret-key-that-is-long-and-random',
-  resave: false,
-  saveUninitialized: false,
-  rolling: true,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 24 * 60 * 60 * 1000,
-    path: '/',
-  },
-  name: 'spotracker.sid',
-  proxy: process.env.NODE_ENV === 'production'
-}));
-
-// Enhanced logging middleware for debugging sessions
+// Enhanced logging middleware
 app.use((req, res, next) => {
   console.log(`\n=== REQUEST DEBUG ===`);
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  console.log('Session ID:', req.sessionID);
-  console.log('Session exists:', !!req.session);
-  console.log('Session data:', JSON.stringify(req.session, null, 2));
   console.log('Cookies:', req.headers.cookie);
   console.log('Origin:', req.headers.origin);
   console.log('User-Agent:', req.headers['user-agent']);
@@ -76,8 +55,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    sessionID: req.sessionID,
-    hasSession: !!req.session
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 

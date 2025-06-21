@@ -1,62 +1,62 @@
 import express from 'express';
 import axios, { AxiosError } from 'axios';
 import { Request, Response, NextFunction } from 'express';
+import { JWTSessionManager } from '../utils/jwtSession';
 
 const router = express.Router();
 const SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
-// Enhanced authentication middleware with detailed logging
+// Authentication middleware using JWT
 const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   console.log('\n=== REQUIRE AUTH MIDDLEWARE ===');
   console.log('Timestamp:', new Date().toISOString());
   console.log('Request:', req.method, req.path);
-  console.log('Session ID:', req.sessionID);
-  console.log('Request Origin:', req.headers.origin);
-  console.log('Request cookies:', req.headers.cookie);
+  console.log('Origin:', req.headers.origin);
+
+  // Get session from JWT
+  const sessionData = JWTSessionManager.getSession(req);
   
-  // Check if session exists
-  if (!req.session) {
-    console.log('❌ NO SESSION OBJECT');
+  if (!sessionData) {
+    console.log('❌ NO SESSION DATA');
     return res.status(401).json({ 
       error: 'No session found. Please log in again.',
-      debug: { sessionExists: false, sessionID: req.sessionID }
+      code: 'NO_SESSION'
     });
   }
 
-  console.log('✅ Session exists');
-  console.log('Session data:', JSON.stringify(req.session, null, 2));
+  console.log('✅ Session data found');
+  console.log('Session contains:', {
+    user: !!sessionData.user,
+    access_token: !!sessionData.access_token,
+    refresh_token: !!sessionData.refresh_token
+  });
 
-  // Check for refresh token (most important)
-  if (!req.session.refresh_token) {
+  // Check for refresh token
+  if (!sessionData.refresh_token) {
     console.log('❌ NO REFRESH TOKEN');
     return res.status(401).json({ 
-      error: 'No refresh token found. Please log in again.',
-      debug: { 
-        sessionExists: true, 
-        sessionID: req.sessionID,
-        hasRefreshToken: false,
-        sessionKeys: Object.keys(req.session)
-      }
+      error: 'Authentication expired. Please log in again.',
+      code: 'NO_REFRESH_TOKEN'
     });
   }
 
   console.log('✅ Refresh token exists');
 
-  // Check access token and expiration
-  const hasAccessToken = !!req.session.access_token;
-  const isTokenExpired = !req.session.token_expires_at || Date.now() >= req.session.token_expires_at - 60000;
+  // Check access token validity
+  const hasAccessToken = !!sessionData.access_token;
+  const isTokenExpired = !sessionData.token_expires_at || 
+    Date.now() >= sessionData.token_expires_at - 60000;
 
-  console.log('Access token status:');
-  console.log('- Has access token:', hasAccessToken);
-  console.log('- Token expires at:', req.session.token_expires_at);
-  console.log('- Current time:', Date.now());
-  console.log('- Is expired:', isTokenExpired);
+  console.log('Token status:', { hasAccessToken, isTokenExpired });
 
-  // If we have a valid access token, proceed
+  // If access token is valid, proceed
   if (hasAccessToken && !isTokenExpired) {
-    console.log('✅ Access token is valid, proceeding');
+    console.log('✅ Valid access token, proceeding');
     console.log('=== END REQUIRE AUTH ===\n');
+    
+    // Attach session data to request for use in route handlers
+    (req as any).sessionData = sessionData;
     return next();
   }
 
@@ -68,7 +68,7 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
       SPOTIFY_TOKEN_URL,
       new URLSearchParams({
         grant_type: 'refresh_token',
-        refresh_token: req.session.refresh_token,
+        refresh_token: sessionData.refresh_token,
       }),
       {
         headers: {
@@ -77,6 +77,7 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
             `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
           ).toString('base64')}`,
         },
+        timeout: 10000
       }
     );
 
@@ -84,28 +85,27 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
     console.log('✅ Token refreshed successfully');
     
     // Update session with new token
-    req.session.access_token = access_token;
-    req.session.token_expires_at = Date.now() + expires_in * 1000;
+    const updatedSessionData = {
+      ...sessionData,
+      access_token,
+      token_expires_at: Date.now() + expires_in * 1000
+    };
     
     // Update refresh token if provided
     if (refresh_token) {
-      req.session.refresh_token = refresh_token;
+      updatedSessionData.refresh_token = refresh_token;
       console.log('✅ Refresh token updated');
     }
 
-    console.log('Updated session data:', JSON.stringify(req.session, null, 2));
+    // Save updated session
+    JWTSessionManager.createSession(res, updatedSessionData);
 
-    // Save session and proceed
-    req.session.save((err) => {
-      if (err) {
-        console.error('❌ Error saving session after token refresh:', err);
-        return res.status(500).json({ error: 'Failed to save session after refresh.' });
-      }
-      
-      console.log('✅ Session saved after token refresh');
-      console.log('=== END REQUIRE AUTH ===\n');
-      next();
-    });
+    console.log('✅ Session updated with new tokens');
+    console.log('=== END REQUIRE AUTH ===\n');
+    
+    // Attach session data to request
+    (req as any).sessionData = updatedSessionData;
+    next();
 
   } catch (error) {
     console.error('❌ Failed to refresh token:', error);
@@ -115,16 +115,12 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
       console.error('Status:', error.response?.status);
     }
     
-    // Destroy invalid session
-    req.session.destroy((err) => {
-      if (err) {
-        console.error('❌ Failed to destroy session after refresh failure:', err);
-      }
-      
-      res.status(401).json({ 
-        error: 'Token refresh failed. Please log in again.',
-        debug: { refreshFailed: true }
-      });
+    // Clear invalid session
+    JWTSessionManager.clearSession(res);
+    
+    res.status(401).json({ 
+      error: 'Token refresh failed. Please log in again.',
+      code: 'REFRESH_FAILED'
     });
   }
 };
@@ -151,11 +147,16 @@ router.use(requireAuth);
 router.get('/top-tracks', async (req: Request, res: Response) => {
   try {
     const { time_range = 'medium_term', limit = 20 } = req.query;
+    const sessionData = (req as any).sessionData;
+    
     console.log(`Fetching top tracks: time_range=${time_range}, limit=${limit}`);
     
     const response = await axios.get(
       `${SPOTIFY_API_BASE}/me/top/tracks?time_range=${time_range}&limit=${limit}`,
-      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
+      { 
+        headers: { 'Authorization': `Bearer ${sessionData.access_token}` },
+        timeout: 10000 
+      }
     );
     
     console.log(`✅ Top tracks fetched: ${response.data.items?.length} tracks`);
@@ -169,11 +170,16 @@ router.get('/top-tracks', async (req: Request, res: Response) => {
 router.get('/top-artists', async (req: Request, res: Response) => {
   try {
     const { time_range = 'medium_term', limit = 20 } = req.query;
+    const sessionData = (req as any).sessionData;
+    
     console.log(`Fetching top artists: time_range=${time_range}, limit=${limit}`);
     
     const response = await axios.get(
       `${SPOTIFY_API_BASE}/me/top/artists?time_range=${time_range}&limit=${limit}`,
-      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
+      { 
+        headers: { 'Authorization': `Bearer ${sessionData.access_token}` },
+        timeout: 10000 
+      }
     );
     
     console.log(`✅ Top artists fetched: ${response.data.items?.length} artists`);
@@ -187,11 +193,16 @@ router.get('/top-artists', async (req: Request, res: Response) => {
 router.get('/recently-played', async (req: Request, res: Response) => {
   try {
     const { limit = 20 } = req.query;
+    const sessionData = (req as any).sessionData;
+    
     console.log(`Fetching recently played: limit=${limit}`);
     
     const response = await axios.get(
       `${SPOTIFY_API_BASE}/me/player/recently-played?limit=${limit}`,
-      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
+      { 
+        headers: { 'Authorization': `Bearer ${sessionData.access_token}` },
+        timeout: 10000 
+      }
     );
     
     console.log(`✅ Recently played fetched: ${response.data.items?.length} tracks`);
@@ -204,21 +215,25 @@ router.get('/recently-played', async (req: Request, res: Response) => {
 // Get current user's profile
 router.get('/me', async (req: Request, res: Response) => {
   try {
+    const sessionData = (req as any).sessionData;
+    
     console.log('Fetching user profile');
-    console.log('Session user data:', req.session.user);
     
     const response = await axios.get(
       `${SPOTIFY_API_BASE}/me`,
-      { headers: { 'Authorization': `Bearer ${req.session.access_token}` } }
+      { 
+        headers: { 'Authorization': `Bearer ${sessionData.access_token}` },
+        timeout: 10000 
+      }
     );
     
     console.log('✅ User profile fetched:', response.data.id, response.data.display_name);
     
-    // Merge Spotify data with session data
+    // Return Spotify data merged with session data
     res.json({ 
       ...response.data, 
-      sessionUser: req.session.user,
-      sessionID: req.sessionID
+      sessionUser: sessionData.user,
+      tokenExpiresAt: sessionData.token_expires_at
     });
   } catch (error) {
     handleApiError(error, res, 'user profile');
