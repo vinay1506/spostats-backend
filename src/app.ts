@@ -3,6 +3,7 @@ import cors from 'cors';
 import session from 'express-session';
 import { authRouter } from './routes/auth';
 import { statsRouter } from './routes/stats';
+import { apiRouter } from './routes/api';
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.get('/health', (req, res) => {
 // Routes
 app.use('/auth', authRouter);
 app.use('/stats', statsRouter);
+app.use('/api', apiRouter);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
