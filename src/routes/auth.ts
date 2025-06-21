@@ -53,6 +53,16 @@ router.get('/login', (req: Request, res: Response) => {
   res.redirect(authUrl);
 });
 
+// Debug endpoint to check environment variables
+router.get('/debug-env', (req, res) => {
+  res.json({
+    frontendUrl: `"${process.env.FRONTEND_URL}"`, // Quotes will show spaces
+    redirectUri: `"${process.env.SPOTIFY_REDIRECT_URI}"`,
+    hasClientId: !!process.env.SPOTIFY_CLIENT_ID,
+    nodeEnv: process.env.NODE_ENV
+  });
+});
+
 // Callback route - handles the OAuth callback - COMPLETE IMPLEMENTATION
 router.get('/callback', async (req: Request, res: Response) => {
   console.log('\n=== OAUTH CALLBACK START ===');
@@ -141,11 +151,17 @@ router.get('/callback', async (req: Request, res: Response) => {
       console.log('Session saved successfully!');
       console.log('Final session ID:', req.sessionID);
       
-      // Redirect to frontend with success
-      const redirectUrl = `${process.env.FRONTEND_URL}/dashboard?auth=success&session=${req.sessionID}`;
+      // --- FIXED REDIRECT LOGIC ---
+      let frontendUrl = process.env.FRONTEND_URL;
+      if (!frontendUrl) {
+        console.error('FRONTEND_URL is not set!');
+        return res.redirect('/error?message=frontend_url_not_set');
+      }
+      frontendUrl = frontendUrl.trim().replace(/\/$/, ''); // Remove trailing slash
+      // No session ID in URL, just redirect to dashboard
+      const redirectUrl = `${frontendUrl}/dashboard?auth=success`;
       console.log('Redirecting to:', redirectUrl);
       console.log('=== OAUTH CALLBACK COMPLETE ===\n');
-      
       res.redirect(redirectUrl);
     });
 
