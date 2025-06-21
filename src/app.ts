@@ -44,17 +44,17 @@ app.use(cors({
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-super-secret-key-that-is-long-and-random',
   resave: false,
-  saveUninitialized: true,
+  saveUninitialized: false,
   rolling: true,
   cookie: {
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
-    sameSite: 'none',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 24 * 60 * 60 * 1000,
     path: '/',
   },
   name: 'spotracker.sid',
-  proxy: true
+  proxy: process.env.NODE_ENV === 'production'
 }));
 
 // Enhanced logging middleware for debugging sessions

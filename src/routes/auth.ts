@@ -63,6 +63,24 @@ router.get('/debug-env', (req, res) => {
   });
 });
 
+// Debug endpoint for session
+router.get('/debug-session', (req: Request, res: Response) => {
+  console.log('=== SESSION DEBUG ===');
+  console.log('Session ID:', req.sessionID);
+  console.log('Session exists:', !!req.session);
+  console.log('Session data:', JSON.stringify(req.session, null, 2));
+  console.log('Session keys:', req.session ? Object.keys(req.session) : 'No session');
+  
+  res.json({
+    sessionID: req.sessionID,
+    sessionExists: !!req.session,
+    sessionData: req.session || null,
+    cookies: req.headers.cookie,
+    origin: req.headers.origin,
+    userAgent: req.headers['user-agent']
+  });
+});
+
 // Callback route - handles the OAuth callback - COMPLETE IMPLEMENTATION
 router.get('/callback', async (req: Request, res: Response) => {
   console.log('\n=== OAUTH CALLBACK START ===');
@@ -70,18 +88,11 @@ router.get('/callback', async (req: Request, res: Response) => {
   console.log('Session ID in callback:', req.sessionID);
   console.log('Session data before processing:', JSON.stringify(req.session, null, 2));
 
-  const { code, state, error } = req.query;
+  const { code, error } = req.query;
 
-  // Handle OAuth errors
   if (error) {
     console.error('OAuth error:', error);
     return res.redirect(`${process.env.FRONTEND_URL}/error?message=${error}`);
-  }
-
-  // Verify state parameter (should match session ID from login)
-  if (!state) {
-    console.error('No state parameter provided');
-    return res.redirect(`${process.env.FRONTEND_URL}/error?message=no_state`);
   }
 
   if (!code) {
@@ -92,7 +103,6 @@ router.get('/callback', async (req: Request, res: Response) => {
   try {
     console.log('Exchanging code for tokens...');
     
-    // Exchange authorization code for access token
     const tokenResponse = await axios.post(SPOTIFY_TOKEN_URL, 
       new URLSearchParams({
         grant_type: 'authorization_code',
@@ -104,31 +114,36 @@ router.get('/callback', async (req: Request, res: Response) => {
           'Authorization': `Basic ${Buffer.from(
             `${process.env.SPOTIFY_CLIENT_ID}:${process.env.SPOTIFY_CLIENT_SECRET}`
           ).toString('base64')}`
-        }
+        },
+        timeout: 10000
       }
     );
 
-    const { access_token, refresh_token, expires_in, token_type } = tokenResponse.data;
+    const { access_token, refresh_token, expires_in } = tokenResponse.data;
     
     console.log('Token exchange successful!');
-    console.log('Token type:', token_type);
-    console.log('Expires in:', expires_in, 'seconds');
-    console.log('Access token length:', access_token?.length);
-    console.log('Refresh token length:', refresh_token?.length);
+    console.log('Access token received:', !!access_token);
+    console.log('Refresh token received:', !!refresh_token);
+    console.log('Expires in:', expires_in);
 
-    // Get user profile from Spotify
-    console.log('Fetching user profile...');
+    if (!access_token || !refresh_token) {
+      console.error('❌ Missing tokens in response:', { access_token: !!access_token, refresh_token: !!refresh_token });
+      return res.redirect(`${process.env.FRONTEND_URL}/error?message=invalid_tokens`);
+    }
+
     const userResponse = await axios.get('https://api.spotify.com/v1/me', {
-      headers: {
-        'Authorization': `Bearer ${access_token}`
-      }
+      headers: { 'Authorization': `Bearer ${access_token}` },
+      timeout: 10000
     });
 
     const userProfile = userResponse.data;
-    console.log('User profile fetched:', userProfile.id, userProfile.display_name);
+    console.log('User profile fetched:', userProfile.id);
 
-    // CRITICAL: Store tokens in session
-    console.log('Storing tokens in session...');
+    if (!req.session) {
+      console.error('❌ No session object available');
+      return res.redirect(`${process.env.FRONTEND_URL}/error?message=no_session`);
+    }
+
     req.session.access_token = access_token;
     req.session.refresh_token = refresh_token;
     req.session.token_expires_at = Date.now() + (expires_in * 1000);
@@ -139,41 +154,50 @@ router.get('/callback', async (req: Request, res: Response) => {
       image: userProfile.images?.[0]?.url
     };
 
-    console.log('Session data after storing tokens:', JSON.stringify(req.session, null, 2));
-
-    // Save session explicitly and wait for it to complete
-    req.session.save((err) => {
-      if (err) {
-        console.error('Error saving session:', err);
-        return res.redirect(`${process.env.FRONTEND_URL}/error?message=session_save_failed`);
-      }
-
-      console.log('Session saved successfully!');
-      console.log('Final session ID:', req.sessionID);
-      
-      // --- FIXED REDIRECT LOGIC ---
-      let frontendUrl = process.env.FRONTEND_URL;
-      if (!frontendUrl) {
-        console.error('FRONTEND_URL is not set!');
-        return res.redirect('/error?message=frontend_url_not_set');
-      }
-      frontendUrl = frontendUrl.trim().replace(/\/$/, ''); // Remove trailing slash
-      // No session ID in URL, just redirect to dashboard
-      const redirectUrl = `${frontendUrl}/dashboard?auth=success`;
-      console.log('Redirecting to:', redirectUrl);
-      console.log('=== OAUTH CALLBACK COMPLETE ===\n');
-      res.redirect(redirectUrl);
+    console.log('Session data after token assignment:', {
+      sessionID: req.sessionID,
+      hasAccessToken: !!req.session.access_token,
+      hasRefreshToken: !!req.session.refresh_token,
+      tokenExpiresAt: req.session.token_expires_at,
+      user: req.session.user?.id
     });
 
+    await new Promise<void>((resolve, reject) => {
+      req.session.save((err) => {
+        if (err) {
+          console.error('❌ Session save error:', err);
+          reject(err);
+        } else {
+          console.log('✅ Session saved successfully');
+          resolve();
+        }
+      });
+    });
+
+    console.log('Final verification - session contains:');
+    console.log('- Access token:', !!req.session.access_token);
+    console.log('- Refresh token:', !!req.session.refresh_token);
+    console.log('- User data:', !!req.session.user);
+
+    const frontendUrl = process.env.FRONTEND_URL?.trim();
+    const redirectUrl = `${frontendUrl}/dashboard?auth=success`;
+    console.log('Redirecting to:', redirectUrl);
+    console.log('=== OAUTH CALLBACK COMPLETE ===\n');
+    
+    res.redirect(redirectUrl);
+
   } catch (error) {
-    console.error('OAuth callback error:', error);
+    console.error('❌ OAuth callback error:', error);
     
     if (axios.isAxiosError(error)) {
-      console.error('Spotify API error:', error.response?.data);
-      console.error('Status:', error.response?.status);
+      console.error('Axios error details:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+      });
     }
     
-    res.redirect(`${process.env.FRONTEND_URL}/error?message=oauth_failed`);
+    res.redirect(`${process.env.FRONTEND_URL}/error?message=oauth_failed&details=${encodeURIComponent((error as any).message)}`);
   }
 });
 
