@@ -206,4 +206,28 @@ router.post('/refresh', async (req: Request, res: Response) => {
   }
 });
 
+// Set session from frontend token (for cross-origin session establishment)
+router.post('/session', (req: Request, res: Response) => {
+  // Expecting: { user, access_token, refresh_token, token_expires_at }
+  const { user, access_token, refresh_token, token_expires_at } = req.body;
+
+  Object.assign(req.session, {
+    user,
+    access_token,
+    refresh_token,
+    token_expires_at
+  });
+
+  console.log('--- /auth/session ---');
+  console.log('Session after /auth/session:', JSON.stringify(req.session, null, 2));
+  console.log('--- End /auth/session Debug ---');
+
+  req.session.save((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to save session' });
+    }
+    res.json({ status: 'ok' });
+  });
+});
+
 export const authRouter = router; 
