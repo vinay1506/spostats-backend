@@ -85,11 +85,6 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
 
-    // Store tokens in session with expiration
-    req.session.access_token = access_token;
-    req.session.refresh_token = refresh_token;
-    req.session.token_expires_at = Date.now() + (expires_in * 1000);
-
     // Get user profile to store basic user info
     const profileResponse = await axios.get('https://api.spotify.com/v1/me', {
       headers: {
@@ -98,7 +93,18 @@ router.get('/callback', async (req: Request, res: Response) => {
     });
 
     const { id, display_name, email } = profileResponse.data;
-    req.session.user = { id, display_name, email };
+    
+    // Assign data to the session object
+    Object.assign(req.session, {
+      access_token,
+      refresh_token,
+      token_expires_at: Date.now() + (expires_in * 1000),
+      user: { id, display_name, email }
+    });
+
+    console.log('--- OAuth Callback ---');
+    console.log('Session data being saved:', JSON.stringify(req.session, null, 2));
+    console.log('--- End of OAuth Callback Debug ---');
 
     // Save session before redirecting
     req.session.save((err) => {
@@ -112,8 +118,8 @@ router.get('/callback', async (req: Request, res: Response) => {
         access_token,
         refresh_token,
         expires_in,
-        expires_at: Date.now() + (expires_in * 1000),
-        user: { id, display_name, email }
+        expires_at: req.session.token_expires_at,
+        user: req.session.user
       };
       const token = Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
 

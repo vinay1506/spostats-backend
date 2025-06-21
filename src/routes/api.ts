@@ -8,12 +8,20 @@ const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
 // Middleware to check authentication and refresh token if necessary
 const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
-  console.log('API request received. Checking auth for session:', req.sessionID);
+  // Enhanced logging for debugging session issues
+  console.log('--- requireAuth Middleware ---');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Session ID:', req.sessionID);
+  console.log('Request Origin:', req.headers.origin);
+  console.log('Session Exists:', !!req.session);
+  console.log('Session Data:', JSON.stringify(req.session, null, 2));
+  console.log('--- End of Session Debug ---');
 
   // 1. Check if refresh token exists. If not, user needs to log in.
-  if (!req.session.refresh_token) {
-    console.log('No refresh token in session. User is not authenticated.');
-    return res.status(401).json({ error: 'Not authenticated. Please log in.' });
+  if (!req.session || !req.session.refresh_token) {
+    console.log('Auth check failed: No session or no refresh token found.');
+    // The error message is updated for clarity on the frontend.
+    return res.status(401).json({ error: 'Session expired or token is invalid. Please log in again.' });
   }
 
   // 2. Check if access token exists and is not expired.
@@ -71,7 +79,7 @@ const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
             console.error('Failed to destroy session after refresh failure.', err);
             return res.status(500).json({ error: 'Failed to process logout after token error.' });
         }
-        res.status(401).json({ error: 'Token refresh failed. Please log in again.' });
+        res.status(401).json({ error: 'Your session has expired and token refresh failed. Please log in again.' });
     });
   }
 };
